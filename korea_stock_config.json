@@ -21,6 +21,6 @@
       "exchange": "KOSPI"
     }
   ],
-  "slack_channel": "#한국주식",
+  "slack_channel": "#korea-stock",
   "last_updated": "2026-07-08"
 }
