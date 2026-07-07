@@ -13,20 +13,22 @@ def _fetch_latest_close(ticker):
     if df is None or df.empty:
         raise ValueError(f"'{ticker}'에 대한 시세 데이터가 없습니다")
 
-    close = df["Close"].iloc[-1]
+    last_row = df.iloc[-1]
     date = df.index[-1]
-    return int(close), date.strftime("%Y-%m-%d")
+    close = int(last_row["Close"])
+    change_rate = round(float(last_row["Change"]) * 100, 2)
+    return close, change_rate, date.strftime("%Y-%m-%d")
 
 
 def fetch_prices(stocks):
-    """종목별로 개별 실패를 허용하며 최근 종가를 조회한다."""
+    """종목별로 개별 실패를 허용하며 최근 종가와 전일 대비 등락률을 조회한다."""
     results = []
     for stock in stocks:
         entry = {"name": stock["name"], "ticker": stock["ticker"]}
         try:
-            close, date = _fetch_latest_close(stock["ticker"])
-            entry.update(close=close, date=date, status="ok")
+            close, change_rate, date = _fetch_latest_close(stock["ticker"])
+            entry.update(close=close, change_rate=change_rate, date=date, status="ok")
         except Exception as e:
-            entry.update(close=None, status="error", message=str(e))
+            entry.update(close=None, change_rate=None, status="error", message=str(e))
         results.append(entry)
     return results

@@ -107,8 +107,8 @@ options:
 {
   "query_date": "2026-07-07",
   "results": [
-    {"name": "삼성전자", "ticker": "005930", "close": 71000, "status": "ok"},
-    {"name": "카카오", "ticker": "035720", "close": null, "status": "error", "message": "데이터 조회 실패"}
+    {"name": "삼성전자", "ticker": "005930", "close": 71000, "change_rate": -6.92, "date": "2026-07-07", "status": "ok"},
+    {"name": "카카오", "ticker": "035720", "close": null, "change_rate": null, "status": "error", "message": "데이터 조회 실패"}
   ]
 }
 ```
