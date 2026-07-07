@@ -1,0 +1,26 @@
+{
+  "stocks": [
+    {
+      "name": "삼성전자",
+      "ticker": "005930.KS",
+      "exchange": "KOSPI"
+    },
+    {
+      "name": "카카오",
+      "ticker": "035720.KS",
+      "exchange": "KOSPI"
+    },
+    {
+      "name": "현대차",
+      "ticker": "005380.KS",
+      "exchange": "KOSPI"
+    },
+    {
+      "name": "SK하이닉스",
+      "ticker": "000660.KS",
+      "exchange": "KOSPI"
+    }
+  ],
+  "slack_channel": "#한국주식",
+  "last_updated": "2026-07-08"
+}
