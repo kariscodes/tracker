@@ -1,26 +1,54 @@
-# 한국 주식 종가 조회 프로그램 — 단계적 구현 계획 (IMPLEMENTATION_PLAN.md)
+# 한국 주식 종가 조회 프로그램 — 구현 문서 (IMPLEMENTATION_PLAN.md)
 
-> `PLAN.md`(설계 문서)의 후속 문서. `PLAN.md`의 Open Questions가 모두 확정된 뒤,
-> 실제 코딩에 들어가기 전 순서와 산출물을 정리한 구현 계획이다. 아직 코드는 작성하지 않았다.
+> `PLAN.md`(초기 설계 문서)의 후속 문서. 이 문서가 **최종 구현 상태**를 반영한다.
+> `PLAN.md`의 3~7절과 5절(인증 방식)은 이 문서로 대체된다.
 
-## Context
+## 어쩌다 이렇게 됐나 (요약)
 
-`PLAN.md`의 설계는 이미 확정되었다 (Open Questions 1~4 모두 답변 완료):
-- Google Sheets 접근: **공개 CSV export 방식** (서비스 계정 인증 불필요)
-- 재시도: **없음**
-- 실패 알림: 별도 알림 없음 (stdout JSON 결과에만 반영)
-- Sheet 컬럼: 헤더 행 존재, **이름 → 티커 → 거래소** 순서
-- 실제 대상 Sheet: `https://docs.google.com/spreadsheets/d/1d9mGD1QpxQqaGEpmHSZuwHmYlsIPekQxo5852pv0W7Q/edit`
+1. 루틴이 `main.py`로 Sheet를 직접 CSV export 다운로드 → 샌드박스 프록시 403
+2. Google Drive 커넥터로 Sheet 읽기는 우회 성공, 그러나 `FinanceDataReader`의
+   시세 조회(`fchart.stock.naver.com`)는 여전히 샌드박스 직접 호출이라 동일하게 403
+3. `check_network.py`로 확인한 결과 KRX/Naver/Yahoo/Google 도메인 전부 차단 —
+   당시엔 루틴 환경(Claude Code Web)의 아웃바운드가 기본적으로 전부 막혀 있고
+   예외가 없는 줄 알았음
+4. GitHub Actions가 대신 계산해서 Sheet에 써주는 방식(서비스 계정 필요), 이어서
+   루틴을 API로 직접 fire해서 결과를 텍스트로 넘기는 방식까지 검토
+5. **하지만 루틴 편집 화면의 환경(Environment) 설정에 "Custom 네트워크 접근 +
+   Allowed domains" 옵션이 있다는 걸 뒤늦게 발견.** `fchart.stock.naver.com`을
+   허용 목록에 추가하니 샌드박스 안에서도 시세 조회가 정상 동작 — 애초에
+   가장 간단했던 A안(도메인 허용)으로 해결됨. GitHub Actions/서비스 계정 관련
+   코드는 모두 제거했다.
 
-다만 `PLAN.md` 3.1절의 config 예시 스키마는 여전히 Sheets API(서비스 계정) 기준으로 작성되어 있어, 5절의 CSV export 결정과 불일치한다. 이 문서는 그 불일치를 해소하고, CSV export 방식에 맞춘 최종 config 스키마와 코드 구조를 확정한 뒤, 실제 코딩 순서를 정리한다.
+## 최종 아키텍처
 
-## 사전 확인 필요 사항 (사용자 액션)
+```
+[Claude Cloud 루틴, cron 평일 16:00 KST]
+  1. Google Drive 커넥터로 Sheet를 CSV로 읽음 (download_file_content,
+     exportMimeType="text/csv") — Sheet 공개 여부와 무관하게 동작
+  2. 받은 CSV 원문을 파일 저장 없이 Bash heredoc으로 바로
+     `python main.py --config korea_stock_config.json --csv-file -` 의 stdin에 흘림
+  3. main.py 내부에서 FinanceDataReader가 fchart.stock.naver.com에 직접 접속해
+     종목별 종가·등락률 조회 (환경의 Allowed domains에 추가되어 있어 정상 동작)
+  4. stdout의 JSON을 파싱해 표로 정리, Slack 채널에 전송
+  5. 파일 저장 없음 — 완전히 무상태(stateless)
+```
 
-- 대상 Google Sheet(`1d9mGD1QpxQqaGEpmHSZuwHmYlsIPekQxo5852pv0W7Q`)의 공유 설정이 **"링크가 있는 모든 사용자 - 뷰어"**로 되어 있는지 확인 필요. CSV export 방식은 인증 없이 접근하므로 비공개 상태면 다운로드가 실패한다. (코드로 확인 불가 — Drive에서 직접 확인)
+당초 `PLAN.md`가 의도했던 구조(루틴이 `main.py`를 직접 실행하고 결과를 즉시
+반환·보고) 그대로다. 다만 종목 리스트를 읽는 부분만 공개 CSV export 대신
+Drive 커넥터를 쓴다 (Sheet를 공개로 유지하지 않아도 되는 부가 이점이 있음).
 
-## 1. config 스키마 재설계 (CSV export 기준)
+## 컴포넌트별 역할
 
-기존 `korea_stock_config.json`의 역할을 "Sheet 위치·파싱 설정"으로 교체한다. Sheets API 전용 필드(`auth.credentials_path`, `google_sheet.range`)는 제거하고 CSV export에 필요한 최소 필드만 남긴다.
+| 파일 | 역할 |
+|---|---|
+| [korea_stock_config.json](korea_stock_config.json) | Sheet 위치, 컬럼 매핑, 옵션 |
+| [src/config_loader.py](src/config_loader.py) | config 로드/검증 |
+| [src/sheet_client.py](src/sheet_client.py) | 공개 CSV export 다운로드·파싱(`fetch_stock_list`), CSV 텍스트 파싱(`parse_stock_list`), 행→종목 변환 공통 로직(`rows_to_stocks`) |
+| [src/price_fetcher.py](src/price_fetcher.py) | FinanceDataReader로 종목별 종가·등락률 조회 |
+| [main.py](main.py) | CLI 진입점. `--csv-file`로 이미 받아온 CSV(Drive 커넥터 결과)를 stdin/파일로 받거나, `--print-csv-url`로 CSV export URL만 출력하거나, 인자 없이 직접 다운로드 |
+| [check_network.py](check_network.py) | 진단용: 후보 도메인 아웃바운드 연결 가능 여부 일괄 점검 |
+
+## config 스키마 (최종)
 
 ```json
 {
@@ -30,62 +58,64 @@
     "has_header": true,
     "columns": { "name": 0, "ticker": 1, "exchange": 2 }
   },
-  "options": {
-    "timeout_sec": 10
-  }
+  "options": { "timeout_sec": 10 }
 }
 ```
 
-- `gid`: 대상 시트 탭의 gid (기본 탭이면 0)
-- `retry_count` 필드는 Open Question #2 결정(재시도 없음)에 따라 제외
+## 반환 JSON 스키마
 
-## 2. 프로젝트 구조
-
-```
-tracker/
-├── korea_stock_config.json   # 재설계된 config (기존 파일 내용 교체)
-├── requirements.txt          # FinanceDataReader, pandas, requests
-├── main.py                   # CLI 진입점 (--config 인자)
-└── src/
-    ├── config_loader.py      # config 로드 + 스키마 검증
-    ├── sheet_client.py       # CSV export URL 조립, 다운로드, 파싱 → 종목 리스트
-    └── price_fetcher.py      # FinanceDataReader로 종목별 최근 종가 조회
+```json
+{
+  "query_date": "2026-07-08",
+  "results": [
+    {"name": "삼성전자", "ticker": "005930", "close": 296000, "change_rate": -6.92, "date": "2026-07-07", "status": "ok"},
+    {"name": "카카오", "ticker": "035720", "close": null, "change_rate": null, "status": "error", "message": "..."}
+  ]
+}
 ```
 
-`gspread`, `google-api-python-client`, `google-auth`는 CSV export 방식에서는 불필요하므로 requirements에서 제외한다.
+## 루틴 설정
 
-## 3. 모듈별 구현 계획
+- **cron**: 평일 07:00 UTC(=16:00 KST)
+- **환경(Environment)**: 편집 화면 → Instructions 아래 클라우드 아이콘 → 환경 설정 →
+  Network access를 **Custom**으로 바꾸고 **Allowed domains**에
+  `fchart.stock.naver.com` 추가 (필요시 "Also include default list of common
+  package managers" 체크 유지)
+- **커넥터**: Google Drive, Slack
 
-**config_loader.py**
-- JSON 로드, 필수 키(`google_sheet.spreadsheet_id`, `columns`) 존재 검증
-- 누락 시 명확한 에러 메시지로 예외 발생
+## 루틴 지침 (최종)
 
-**sheet_client.py**
-- URL 조립: `https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}`
-- `requests.get(url, timeout=options.timeout_sec)`로 다운로드 (재시도 없음)
-- CSV 파싱 시 `has_header=true`면 첫 행 스킵, `columns` 매핑대로 (name, ticker, exchange) 튜플 리스트 생성
-- 다운로드/파싱 실패는 예외로 상위 전파 → `PLAN.md` 8절 "Sheet 조회 자체 실패 = 전체 프로세스 실패" 정책 반영
+```
+저장소 tracker를 clone/pull 받은 뒤 그 디렉터리에서 다음을 수행해줘.
 
-**price_fetcher.py**
-- 종목별로 `FinanceDataReader.DataReader(ticker)` 호출을 개별 try/except로 감쌈 (한 종목 실패가 전체를 막지 않음)
-- 정상: 최근 행의 종가·거래일 추출 → `{"name","ticker","close","date","status":"ok"}`
-- 실패: `{"name","ticker","close":null,"status":"error","message":...}`
-- 휴장일 등으로 당일 데이터가 없으면 FDR이 반환하는 가장 최근 거래일 종가를 쓰고 `date` 필드로 실제 조회일을 명시
+1. 의존성이 없다면 `pip install -r requirements.txt`로 설치한다.
+2. Google Drive 커넥터의 download_file_content 도구를
+   fileId="1d9mGD1QpxQqaGEpmHSZuwHmYlsIPekQxo5852pv0W7Q",
+   exportMimeType="text/csv" 로 호출해 Sheet 내용을 CSV로 받는다.
+3. 응답의 content 필드(base64)를 디코딩해 CSV 원문(첫 줄은 헤더:
+   이름,티커,거래소)을 얻는다.
+4. 디코딩한 CSV 원문을 파일로 저장하지 말고, Bash heredoc으로 바로
+   main.py의 stdin에 흘려보낸다 (작은따옴표 'EOF' 구분자 사용):
 
-**main.py**
-- `argparse`로 `--config` 인자 (기본값 `korea_stock_config.json`)
-- 흐름: config 로드 → sheet_client로 종목 리스트 조회(실패 시 에러 JSON 출력 + `exit(1)`) → price_fetcher로 종목별 조회 → `{"query_date": ..., "results": [...]}` 조립 → `json.dumps(..., ensure_ascii=False)`로 stdout 출력 → `exit(0)`
+   python main.py --config korea_stock_config.json --csv-file - <<'EOF'
+   <디코딩된 CSV 원문>
+   EOF
 
-## 4. Claude Code 루틴 연동 설계 (실제 등록은 구현 단계에서 수행)
+5. stdout에 출력된 JSON을 파싱한다.
+   - 최상위에 "status": "error"가 있으면 실행 실패로 간주하고 그 사실을
+     message와 함께 Slack #channel-name 채널에 보낸다.
+   - 정상인 경우 6번으로 진행한다.
+6. results 배열을 표로 정리해 Slack #channel-name 채널에 전송한다:
+   - 제목 줄: "한국 주식 종가 조회 결과 (query_date)"
+   - 표 컬럼: 종목명 | 종가 | 등락률 | 조회일
+   - "status": "error"인 종목은 표에서 빼고, 하단에 "조회 실패 종목"
+     목록(이름/티커/사유)을 별도로 추가한다. 실패 종목이 없으면 생략.
+7. 결과를 파일에 저장하지 않는다. Slack 전송이 유일한 결과 보고 채널이다.
+```
 
-- **session-start-hook**: Python 가상환경 확인, `requirements.txt` 설치. (인증 키 확인 절차는 CSV export 방식이라 불필요 — `PLAN.md` 4절에서 해당 항목 제외)
-- **cron 트리거**: `0 7 * * 1-5` (UTC, 평일 KST 16:00), `create_new_session_on_fire: true`
-- **루틴 prompt**: "korea_stock_config.json을 인자로 main.py를 실행하고, stdout의 JSON 결과를 파싱하여 종목별 종가를 요약 보고. 조회 실패 종목이 있으면 별도로 알려줘."
+## 검증 계획
 
-## 5. 검증 계획
-
-구현 완료 후:
-1. `python main.py --config korea_stock_config.json` 수동 실행 → stdout JSON 확인
-2. 정상 종목, 존재하지 않는 티커(개별 에러), 휴장일 케이스 각각 결과 확인
-3. `spreadsheet_id`를 잘못된 값으로 바꿔 Sheet 접근 실패 시나리오 재현 → 에러 JSON + `exit(1)` 확인
-4. cron 등록 전 위 수동 실행으로 정상 동작을 먼저 확인
+1. 로컬: `python main.py --config korea_stock_config.json --csv-file -`에 샘플 CSV를 흘려서 정상/개별 실패 케이스 확인 (완료)
+2. 루틴 환경의 Allowed domains에 `fchart.stock.naver.com` 추가 후 저장
+3. 루틴을 1회 수동 실행(Run now)해서 Slack 메시지가 정상 도착하는지 확인
+4. 필요시 `check_network.py`를 루틴에서 1회 실행해 도메인 허용이 실제로 반영됐는지 재확인

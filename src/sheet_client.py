@@ -25,10 +25,8 @@ def build_csv_export_url(google_sheet):
     )
 
 
-def parse_stock_list(csv_text, google_sheet):
-    reader = csv.reader(io.StringIO(csv_text))
-    rows = list(reader)
-
+def rows_to_stocks(rows, google_sheet):
+    """CSV/Sheets API 어느 쪽에서 왔든, 행 목록(list of list[str])을 종목 리스트로 변환한다."""
     if google_sheet["has_header"] and rows:
         rows = rows[1:]
 
@@ -39,14 +37,14 @@ def parse_stock_list(csv_text, google_sheet):
 
     stocks = []
     for row in rows:
-        if not row or not any(cell.strip() for cell in row):
+        if not row or not any(str(cell).strip() for cell in row):
             continue
         try:
             stocks.append(
                 {
-                    "name": row[name_idx].strip(),
-                    "ticker": row[ticker_idx].strip(),
-                    "exchange": row[exchange_idx].strip(),
+                    "name": str(row[name_idx]).strip(),
+                    "ticker": str(row[ticker_idx]).strip(),
+                    "exchange": str(row[exchange_idx]).strip(),
                 }
             )
         except IndexError:
@@ -56,6 +54,12 @@ def parse_stock_list(csv_text, google_sheet):
         raise SheetFetchError("Sheet에서 조회된 종목이 없습니다")
 
     return stocks
+
+
+def parse_stock_list(csv_text, google_sheet):
+    reader = csv.reader(io.StringIO(csv_text))
+    rows = list(reader)
+    return rows_to_stocks(rows, google_sheet)
 
 
 def fetch_stock_list(config):
